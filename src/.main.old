@@ -1,0 +1,417 @@
+#include <Arduino.h>
+#include <WiFi.h>
+
+#include <FirebaseClient.h>
+#include <WiFiClientSecure.h>
+
+#define LED_PIN 2 // Define the pin where the LED is connected
+
+#define WIFI_SSID "Andini"
+#define WIFI_PASSWORD "07121516"
+
+#define API_KEY "AIzaSyAXzgcLtZMn4cGxqIS-cWq03SuFxdqtgLc"
+#define DATABASE_URL                                                           \
+  "https://"                                                                   \
+  "smart-grid-c2630-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define DATABASE_SECRET "MZW1MbKTRW1X5qeUZmBw9pan9E2zCVER63pqq1Lr"
+
+void asyncCB(AsyncResult &aResult);
+void printResult(AsyncResult &aResult);
+
+WiFiClientSecure ssl_client1, ssl_client2;
+DefaultNetwork network;
+AsyncClientClass aClient(ssl_client1, getNetwork(network)),
+    aClient2(ssl_client2, getNetwork(network));
+
+FirebaseApp app;
+RealtimeDatabase Database;
+NoAuth noAuth;
+
+unsigned long ms = 0;
+int i = 0;
+bool ledState = 0; // To store the latest LED state from Firebase
+bool ledStateChanged = false;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT); // Set LED_PIN as an output
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  Firebase.printf("Firebase Client v%s\n", FIREBASE_CLIENT_VERSION);
+
+  ssl_client1.setInsecure();
+  ssl_client2.setInsecure();
+
+  // Initialize the authentication handler.
+  LegacyToken legacy_token(DATABASE_SECRET);
+  initializeApp(aClient2, app, getAuth(legacy_token));
+
+  // Binding the authentication handler with your Database class object.
+  app.getApp<RealtimeDatabase>(Database);
+
+  // Set your database URL
+  Database.url(DATABASE_URL);
+
+  // Since v1.2.1, in SSE mode (HTTP Streaming) task, you can filter the Stream
+  // events by using RealtimeDatabase::setSSEFilters(<keywords>), which the
+  // <keywords> is the comma separated events. The event keywords supported are:
+  // get - To allow the http get response (first put event since stream
+  // connected). put - To allow the put event. patch - To allow the patch event.
+  // keep-alive - To allow the keep-alive event.
+  // cancel - To allow the cancel event.
+  // auth_revoked - To allow the auth_revoked event.
+  // To clear all prevousely set filter to allow all Stream events, use
+  // RealtimeDatabase::setSSEFilters().
+  Database.setSSEFilters("get,put,patch,keep-alive,cancel,auth_revoked");
+
+  // Initiate the Stream connection to listen the data changes.
+  // This function can be called once.
+  // The Stream was connected using async get function (non-blocking) which the
+  // result will assign to the function in this case.
+  Database.get(aClient, "/test/stream", asyncCB,
+               true /* this option is for Stream connection */);
+}
+
+void loop() {
+  // Polling for internal task operation
+  // This required for Stream in this case.
+  app.loop();
+  Database.loop();
+
+  if (millis() - ms > 10000 && app.ready() && i <= 10) {
+    ms = millis();
+    String path = "/test/stream/arr/" + String(i);
+    // Generate random value between 210 and 225
+    int randomValue = random(210, 226);
+    Database.set(aClient2, path, randomValue, asyncCB, "pushArrayTask");
+    i++;
+  }
+
+  if (ledStateChanged) {
+    ledStateChanged = false;
+    digitalWrite(LED_PIN, ledState);
+  }
+}
+
+void asyncCB(AsyncResult &aResult) {
+  // WARN: Do not put your codes inside the callback and printResult.
+
+  printResult(aResult);
+}
+
+void printResult(AsyncResult &aResult) {
+  if (aResult.isDebug()) {
+    Firebase.printf("Debug task: %s, msg: %s\n", aResult.uid().c_str(),
+                    aResult.debug().c_str());
+  }
+
+  if (aResult.isError()) {
+    Firebase.printf("Error task: %s, msg: %s, code: %d\n",
+                    aResult.uid().c_str(), aResult.error().message().c_str(),
+                    aResult.error().code());
+  }
+
+  if (aResult.available()) {
+    RealtimeDatabaseResult &RTDB = aResult.to<RealtimeDatabaseResult>();
+    if (RTDB.isStream()) {
+      Serial.println("----------------------------");
+      Firebase.printf("task: %s\n", aResult.uid().c_str());
+      Firebase.printf("event: %s\n", RTDB.event().c_str());
+      Firebase.printf("path: %s\n", RTDB.dataPath().c_str());
+      Firebase.printf("data: %s\n", RTDB.to<const char *>());
+      Firebase.printf("type: %d\n", RTDB.type());
+
+      // The stream event from RealtimeDatabaseResult can be converted to the
+      // values as following.
+      // bool v1 = RTDB.to<bool>();
+      // int v2 = RTDB.to<int>();
+      // float v3 = RTDB.to<float>();
+      // double v4 = RTDB.to<double>();
+      // String v5 = RTDB.to<String>();
+
+      // I don't know if this is okay, because the doc say Do not put your codes
+      // inside the callback and printResult.
+      if (RTDB.dataPath() == "/led") {
+        ledState = RTDB.to<int>();
+        ledStateChanged = true;
+      }
+    } else {
+      Serial.println("----------------------------");
+      Firebase.printf("task: %s, payload: %s\n", aResult.uid().c_str(),
+                      aResult.c_str());
+    }
+  }
+}
+
+
+
+
+/* #include "FirebaseHandler.h"
+#include "HardwareSerial.h"
+#include <WiFi.h>
+
+#define relaiSatu 2
+#define relaiDua 12
+#define relaiTiga 14
+#define relaiEmpat 27
+#define relaiLima 26
+#define relaiEnam 25
+#define relaiTujuh 33
+#define relaiDelapan 32
+#define relaiPompa 15
+
+// Initialize static members
+// clang-format off
+LegacyToken FirebaseHandler::legacy_token(FirebaseHandler::DATABASE_SECRET);
+WiFiClientSecure FirebaseHandler::ssl_client1, FirebaseHandler::ssl_client2;
+DefaultNetwork FirebaseHandler::network;
+AsyncClientClass FirebaseHandler::aClient(FirebaseHandler::ssl_client1,
+getNetwork(FirebaseHandler::network)); AsyncClientClass
+FirebaseHandler::aClient2(FirebaseHandler::ssl_client2,
+getNetwork(FirebaseHandler::network)); FirebaseApp FirebaseHandler::app;
+RealtimeDatabase FirebaseHandler::Database;
+
+unsigned long FirebaseHandler::ms = 0;
+unsigned long FirebaseHandler::updateCounter = 0;
+unsigned long FirebaseHandler::second = 00;
+unsigned long FirebaseHandler::minute = 42;
+unsigned long FirebaseHandler::hour = 13;
+// clang-format on
+
+// Connect to Wi-Fi
+void FirebaseHandler::connectToWiFi() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+// Initialize Firebase and start listening to stream events
+void FirebaseHandler::begin() {
+  pinMode(relaiSatu, OUTPUT); // Initialize LED pin as output
+
+  Serial.printf("Firebase Client v%s\n", FIREBASE_CLIENT_VERSION);
+
+  ssl_client1.setInsecure();
+  ssl_client2.setInsecure();
+
+  initializeApp(aClient2, app, getAuth(legacy_token), asyncCallback,
+                "initializeApp");
+  app.getApp<RealtimeDatabase>(Database);
+
+  Database.url(DATABASE_URL);
+  Database.setSSEFilters("get,put,patch,keep-alive,cancel,auth_revoked");
+
+  initializeState();
+
+  Database.get(aClient, "/control/", asyncCallback, true);
+}
+
+void FirebaseHandler::initializeState() {
+  // TODO: initial "you know" state
+  // JsonDocument doc;
+  //
+  // const String arrInt = Database.get<String>(aClient2,
+  // "/test/stream/arr_int"); DeserializationError error = deserializeJson(doc,
+  // arrInt); if (error) {
+  //   Serial.print("deserializeJson failed");
+  // }
+  // Serial.printf("Length of array is: %zu ", doc.size());
+}
+
+// Poll Firebase operations and push data periodically
+void FirebaseHandler::update() {
+  app.loop();
+  Database.loop();
+
+  if (millis() - ms > 2500 && app.ready() && updateCounter < 24) {
+    ms = millis();
+    pushRealtimeVoltage();
+    pushHourlyVoltage();
+    updateCounter++;
+    Serial.println("Update Counter is:" + String(updateCounter));
+  }
+
+  if (updateCounter >= 24) {
+    Serial.println("IS THIS BEING CALLED???");
+    Database.remove(aClient2, "/monitor/voltages/", asyncCallback,
+                    "deletingUnusedData");
+    updateCounter = 0;
+  }
+}
+
+String FirebaseHandler::padZero(int num) {
+  return num < 10 ? "0" + String(num) : String(num);
+}
+
+void FirebaseHandler::pushRealtimeVoltage() {
+  const String path = "/monitor/voltages/realtime/";
+  const int randomValue = random(210, 226);
+
+  const string_t data = string_t(padZero(minute) + ":" + padZero(second));
+  object_t json, obj1, obj2;
+  JsonWriter writer;
+  writer.create(obj1, "time", data);
+  writer.create(obj2, "value", randomValue);
+  writer.join(json, 2, &obj1, &obj2);
+  Database.push<object_t>(aClient2, path, json, asyncCallback,
+                          "pushRealtimeVotlages");
+
+  updateTimer();
+}
+
+void FirebaseHandler::pushHourlyVoltage() {
+  const String path = "/monitor/voltages/hourly/";
+  const int randomValue = random(210, 226);
+
+  const string_t data = string_t(padZero(hour) + ":00");
+  object_t json, obj1, obj2;
+  JsonWriter writer;
+  writer.create(obj1, "time", data);
+  writer.create(obj2, "value", randomValue);
+  writer.join(json, 2, &obj1, &obj2);
+  Database.push<object_t>(aClient2, path, json, asyncCallback,
+                          "pushHourlyVoltage");
+}
+
+void FirebaseHandler::updateTimer() {
+  second = second + 20;
+  if (second == 60) {
+    second = 0;
+    minute = minute + 1;
+  }
+
+  if (minute == 60) {
+    minute = 0;
+  }
+
+  hour = hour + 1;
+  if (hour == 24) {
+    hour = 0;
+  }
+}
+
+// Firebase async callback to handle responses and stream events
+void FirebaseHandler::asyncCallback(AsyncResult &aResult) {
+  printResult(aResult);
+}
+
+void FirebaseHandler::printResult(AsyncResult &aResult) {
+  // clang-format off
+  if (aResult.isEvent()) {
+    Firebase.printf("Event task: %s, msg: %s, code: %d\n",
+aResult.uid().c_str(), aResult.appEvent().message().c_str(),
+aResult.appEvent().code());
+  }
+
+  if (aResult.isDebug()) {
+    Firebase.printf("Debug task: %s, ", aResult.uid().c_str());
+    Firebase.printf("msg: %s\n", aResult.debug().c_str());
+  }
+
+  if (aResult.isError()) {
+    Firebase.printf("Error task: %s, ", aResult.uid().c_str());
+    Firebase.printf("msg: %s, ", aResult.error().message().c_str());
+    Firebase.printf("code: %d\n",  aResult.error().code());
+  }
+  // clang-format off
+
+  if (aResult.available()) {
+    RealtimeDatabaseResult &RTDB = aResult.to<RealtimeDatabaseResult>();
+    if (RTDB.isStream()) {
+      Serial.println("----------------------------");
+      Firebase.printf("task: %s\n", aResult.uid().c_str());
+      Firebase.printf("event: %s\n", RTDB.event().c_str());
+      Firebase.printf("path: %s\n", RTDB.dataPath().c_str());
+      Firebase.printf("data: %s\n", RTDB.to<const char *>());
+      Firebase.printf("type: %d\n", RTDB.type());
+
+      if (RTDB.isStream() && RTDB.dataPath() == "/room-a/lamp") {
+        bool ledState = RTDB.to<bool>();
+        handleLEDUpdate(ledState);
+      }
+    } else {
+      Serial.println("----------------------------");
+      Firebase.printf("task: %s, payload: %s\n", aResult.uid().c_str(),
+aResult.c_str());
+    }
+  }
+
+}
+
+// Update LED state
+void FirebaseHandler::handleLEDUpdate(bool ledState) {
+  digitalWrite(relaiSatu, ledState); // Update LED state on pin 2
+} */
+
+
+/* #ifndef FIREBASE_HANDLER_H
+#define FIREBASE_HANDLER_H
+
+#include <FirebaseClient.h>
+#include <WiFiClientSecure.h>
+
+class FirebaseHandler {
+public:
+  static void connectToWiFi();
+  static void begin();
+  static void update();
+
+private:
+  static void asyncCallback(AsyncResult &aResult);
+  static void printResult(AsyncResult &aResult);
+  static void pushRealtimeVoltage();
+  static void pushHourlyVoltage();
+  static void updateTimer();
+  static void handleLEDUpdate(bool ledState);
+  static void initializeState();
+  static String padZero(int num);
+
+  // Firebase configuration constants
+  // clang-format off
+  // static constexpr const char *WIFI_SSID = "fe";
+  // static constexpr const char *WIFI_PASSWORD = "12345678";
+  // static constexpr const char *WIFI_SSID = "Andini";
+  // static constexpr const char *WIFI_PASSWORD = "07121516";
+  static constexpr const char *WIFI_SSID = "WIFI ID";
+  static constexpr const char *WIFI_PASSWORD = "maubuatapa";
+  static constexpr const char *API_KEY =
+"AIzaSyAXzgcLtZMn4cGxqIS-cWq03SuFxdqtgLc"; static constexpr const char
+*DATABASE_URL =
+"https://smart-grid-c2630-default-rtdb.asia-southeast1.firebasedatabase.app/";
+  static constexpr const char *DATABASE_SECRET =
+"MZW1MbKTRW1X5qeUZmBw9pan9E2zCVER63pqq1Lr";
+  // clang-format on
+
+  // Firebase and networking objects
+  static LegacyToken legacy_token;
+  static WiFiClientSecure ssl_client1, ssl_client2;
+  static DefaultNetwork network;
+  static AsyncClientClass aClient, aClient2;
+  static FirebaseApp app;
+  static RealtimeDatabase Database;
+
+  // LED and update state
+  static unsigned long ms;
+  static unsigned long updateCounter;
+  static unsigned long second;
+  static unsigned long minute;
+  static unsigned long hour;
+};
+
+#endif */
