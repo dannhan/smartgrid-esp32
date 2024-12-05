@@ -1,4 +1,5 @@
 #include "FirebaseHandler.h"
+#include "ArduinoJson/Json/JsonSerializer.hpp"
 #include "HardwareSerial.h"
 #include "RelayManager.h"
 #include "config.h"
@@ -9,7 +10,7 @@ unsigned long FirebaseHandler::second = 0;
 unsigned long FirebaseHandler::minute = 42;
 unsigned long FirebaseHandler::hour = 13;
 unsigned int FirebaseHandler::realtimeDataLength = 0;
-bool FirebaseHandler::deleteCompleted = true;
+bool FirebaseHandler::isDeletingMetricData = false;
 
 // clang-format off
 WiFiClientSecure FirebaseHandler::ssl_client1, FirebaseHandler::ssl_client2;
@@ -48,108 +49,128 @@ void FirebaseHandler::begin() {
   // Initialize Firebase and stream settings
   Database.url(DB_URL);
 
-  // Get the length of data
+  // filter the Stream events
+  Database.setSSEFilters("get,put,patch,keep-alive,cancel,auth_revoked");
+
+  // Start streaming on control and keep track for the value change
+  Database.get(aClient, "/control/", aResult_no_callback, true);
+
+  // Get the length of realtime metric data and assigns it to realtimeDataLength
   String monitor = Database.get<String>(aClient2, "/monitor/voltages/realtime");
   JsonDocument doc;
   deserializeJson(doc, monitor);
   realtimeDataLength = doc.size();
   Serial.printf("The length of initial realtime data: %u\n",
                 realtimeDataLength);
-
-  // filter the Stream events
-  Database.setSSEFilters("get,put,patch,keep-alive,cancel,auth_revoked");
-
-  // Start streaming on control and keep track for the value change
-  Database.get(aClient, "/control/", aResult_no_callback, true);
 }
 
-void FirebaseHandler::update() {
+void FirebaseHandler::loop() {
   app.loop();
   Database.loop();
+}
 
-  // Push chart data if the data stoerd is less than 24
+void FirebaseHandler::processRelayStreamData() {
+  if (aResult_no_callback.available()) {
+    RealtimeDatabaseResult &RTDB =
+        aResult_no_callback.to<RealtimeDatabaseResult>();
+
+    if (RTDB.isStream()) {
+      const String path = RTDB.dataPath();
+
+      if (path == "/") {
+        RelayManager::initializeRelayState(RTDB);
+      } else {
+        Firebase.printf("task: %s\n", aResult_no_callback.uid().c_str());
+        Serial.println("----------------------------");
+        Firebase.printf("event: %s\n", RTDB.event().c_str());
+        Firebase.printf("path: %s\n", RTDB.dataPath().c_str());
+        Firebase.printf("data: %s\n", RTDB.to<const char *>());
+        Firebase.printf("type: %d\n", RTDB.type());
+
+        RelayManager::handleRelayUpdate(RTDB);
+      }
+    } else {
+      Serial.println("----------------------------");
+      Firebase.printf("task: %s, payload: %s\n",
+                      aResult_no_callback.uid().c_str(),
+                      aResult_no_callback.c_str());
+    }
+
+    Firebase.printf("Free Heap: %d\n", ESP.getFreeHeap());
+  }
+}
+
+void FirebaseHandler::manageMetricsData() {
+  // Push chart data if the data stored is less than 24
   if (millis() - ms > 5000 && app.ready() && realtimeDataLength <= 24 &&
-      deleteCompleted) {
+      !isDeletingMetricData) {
     ms = millis();
+    pushRealtimeMetricsData();
 
-    // clang-format off
-    Database.push<object_t>(aClient2, "/monitor/voltages/realtime", randGenerator(padZero(minute) + ":" + padZero(second)));
-    Database.push<object_t>(aClient2, "/monitor/currents/realtime", randGenerator(padZero(minute) + ":" + padZero(second)));
-    Database.push<object_t>(aClient2, "/monitor/powers/realtime", randGenerator(padZero(minute) + ":" + padZero(second)));
-    updateTimer();
-
-    /* 
-    Database.push<object_t>(aClient2, "/monitor/voltages/hourly", randGenerator());
-    Database.push<object_t>(aClient2, "/monitor/currents/hourly", randGenerator());
-    Database.push<object_t>(aClient2, "/monitor/powers/hourly", randGenerator());
-    */
-    // clang-format on
-
-    realtimeDataLength++;
+    Serial.println("realtimeDataLength: " + String(realtimeDataLength));
   }
 
   // Delete unused data if the data stored is more than 24 and the previous
   // deletion is completed
-  if (realtimeDataLength > 24 && deleteCompleted) {
-    deleteCompleted = false;
+  if (realtimeDataLength > 24 && !isDeletingMetricData) {
+    isDeletingMetricData = true;
 
+    // get the value for monitor to be deleted
     DatabaseOptions options;
     options.filter.orderBy("$key");
+
     Database.get(aClient2, "/monitor/", options, aResult_no_callback2);
   }
 
-  // Callback for streaming data
-  RelayManager::handleRelayUpdate(aResult_no_callback);
+  // This only run if aResult is available, which mean after
+  // getting the values of old keys
+  if (aResult_no_callback2.available()) {
+    deleteRealtimeMetricsData(aResult_no_callback2);
+  }
+}
 
-  // TODO: damn what is this?
-  deleteOldestKeys(aResult_no_callback2);
+void FirebaseHandler::setSensorStatus(String sensorType, int value) {
+  Database.set<int>(aClient2, "/sensors/" + sensorType, value);
 }
 
 /* -- Class Private Method -------------------------------- */
+void FirebaseHandler::pushRealtimeMetricsData() {
+  updateTimer();
 
-void FirebaseHandler::pushData(const char *path) {
-  Database.push<object_t>(
-      aClient2, path, randGenerator(padZero(minute) + ":" + padZero(second)));
+  const String time = padZero(minute) + ":" + padZero(second);
+
+  // TODO: read real data instead
+  // clang-format off
+  Database.push<object_t>(aClient2, "/monitor/voltages/realtime", randGenerator(time));
+  Database.push<object_t>(aClient2, "/monitor/currents/realtime", randGenerator(time));
+  Database.push<object_t>(aClient2, "/monitor/powers/realtime", randGenerator(time));
+  // clang-format on
+
+  realtimeDataLength++;
 }
 
-void FirebaseHandler::deleteOldestKeys(AsyncResult &aResult) {
-  if (aResult.isError()) {
-    printError(aResult);
-  }
+void FirebaseHandler::deleteRealtimeMetricsData(AsyncResult &aResult) {
+  // Parse the async result
+  RealtimeDatabaseResult &RTDB = aResult.to<RealtimeDatabaseResult>();
+  JsonDocument doc;
+  deserializeJson(doc, RTDB.to<const char *>());
 
-  if (aResult.available()) {
-    RealtimeDatabaseResult &RTDB = aResult.to<RealtimeDatabaseResult>();
+  // delete the data
+  deleteFirstIndex("/monitor/powers/realtime/", doc["powers"]["realtime"]);
+  deleteFirstIndex("/monitor/voltages/realtime/", doc["voltages"]["realtime"]);
+  deleteFirstIndex("/monitor/currents/realtime/", doc["currents"]["realtime"]);
 
-    JsonDocument doc;
-    deserializeJson(doc, RTDB.to<const char *>());
-    // serializeJsonPretty(doc, Serial);
-
-    // Call deleteOldestKey for each type, only specifying the base name
-    deleteOldestKey(doc, "voltages");
-    deleteOldestKey(doc, "currents");
-    deleteOldestKey(doc, "powers");
-
-    realtimeDataLength--;
-    deleteCompleted = true;
-  }
+  realtimeDataLength--;
+  isDeletingMetricData = false;
 }
 
-void FirebaseHandler::deleteOldestKey(JsonDocument &doc, const char *type) {
-  String path = "/monitor/" + String(type) + "/realtime/";
-
-  JsonObject json = doc[type]["realtime"].as<JsonObject>();
-
-  while (json.size() > 24) {
-    Serial.println(path + " JSON SIZE: " + String(json.size()));
-
-    JsonObject::iterator it = json.begin();
-    const char *firstKey = it->key().c_str();
-
-    // Remove from JSON object and Firebase
-    Database.remove(aClient2, path + firstKey, printResult, "databaseRemove");
-    json.remove(firstKey);
-  }
-}
+void FirebaseHandler::deleteFirstIndex(const char *path, JsonObject json) {
+  JsonObject::iterator it = json.begin();
+  const char *firstKey = it->key().c_str();
+  Serial.println("------ Now removing: " + String(path) + firstKey + "------");
+  Database.remove(aClient2, String(path) + firstKey, printResult,
+                  "databaseRemove");
+};
 
 // TODO: implement real timestamp functionality
 void FirebaseHandler::updateTimer() {
@@ -205,9 +226,6 @@ void FirebaseHandler::printResult(AsyncResult &aResult) {
 }
 
 /* -- Local Function Definition -------------------- */
-
-String padZero(int num) { return num < 10 ? "0" + String(num) : String(num); }
-
 void printError(AsyncResult aResult) {
   Firebase.printf("Error task: %s, msg: %s, code: %d\n", aResult.uid().c_str(),
                   aResult.error().message().c_str(), aResult.error().code());
@@ -222,3 +240,5 @@ object_t randGenerator(String time) {
   serializeJson(doc, json);
   return object_t(json);
 }
+
+String padZero(int num) { return num < 10 ? "0" + String(num) : String(num); }

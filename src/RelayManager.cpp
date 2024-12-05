@@ -1,7 +1,13 @@
 #include "RelayManager.h"
 #include <ArduinoJson.h>
 
-void RelayManager::initializeRelays() {
+unsigned long RelayManager::buzzerBlinkMs = 0;
+bool RelayManager::isBuzzerBlinkActive = false;
+
+void RelayManager::activateRelays() {
+  pinMode(buzzer, OUTPUT);
+  pinMode(relaiPompa, OUTPUT);
+
   pinMode(relaiSatu, OUTPUT);
   pinMode(relaiDua, OUTPUT);
   pinMode(relaiTiga, OUTPUT);
@@ -12,7 +18,7 @@ void RelayManager::initializeRelays() {
   pinMode(relaiDelapan, OUTPUT);
 }
 
-void RelayManager::initializeState(RealtimeDatabaseResult RTDB) {
+void RelayManager::initializeRelayState(RealtimeDatabaseResult RTDB) {
   JsonDocument doc;
   deserializeJson(doc, RTDB.to<const char *>());
 
@@ -24,51 +30,82 @@ void RelayManager::initializeState(RealtimeDatabaseResult RTDB) {
   digitalWrite(relaiEnam, bool(doc["room-c"]["socket"]));
   digitalWrite(relaiTujuh, bool(doc["room-d"]["lamp"]));
   digitalWrite(relaiDelapan, bool(doc["room-d"]["socket"]));
-
-  return;
 }
 
-void RelayManager::handleRelayUpdate(AsyncResult &aResult) {
-  if (!aResult.available())
-    return;
+void RelayManager::handleRelayUpdate(RealtimeDatabaseResult RTDB) {
+  const String path = RTDB.dataPath();
 
-  RealtimeDatabaseResult &RTDB = aResult.to<RealtimeDatabaseResult>();
-  if (RTDB.isStream()) {
-    Serial.println("----------------------------");
-    Firebase.printf("task: %s\n", aResult.uid().c_str());
-    Firebase.printf("event: %s\n", RTDB.event().c_str());
-    Firebase.printf("path: %s\n", RTDB.dataPath().c_str());
-    Firebase.printf("data: %s\n", RTDB.to<const char *>());
-    Firebase.printf("type: %d\n", RTDB.type());
+  if (path == "/room-a/lamp") {
+    digitalWrite(relaiSatu, RTDB.to<bool>());
+  } else if (path == "/room-a/socket") {
+    digitalWrite(relaiDua, RTDB.to<bool>());
+  } else if (path == "/room-b/lamp") {
+    digitalWrite(relaiTiga, RTDB.to<bool>());
+  } else if (path == "/room-b/socket") {
+    digitalWrite(relaiEmpat, RTDB.to<bool>());
+  } else if (path == "/room-c/lamp") {
+    digitalWrite(relaiLima, RTDB.to<bool>());
+  } else if (path == "/room-c/socket") {
+    digitalWrite(relaiEnam, RTDB.to<bool>());
+  } else if (path == "/room-d/lamp") {
+    digitalWrite(relaiTujuh, RTDB.to<bool>());
+  } else if (path == "/room-d/socket") {
+    digitalWrite(relaiDelapan, RTDB.to<bool>());
+  }
+}
 
-    const String path = RTDB.dataPath();
-    if (path == "/") {
-      initializeState(RTDB);
-    }
+void RelayManager::flameDetectedCallback() {
+  // activate buzzer and water pump
+  isBuzzerBlinkActive = true;
+  digitalWrite(relaiPompa, HIGH);
 
-    // put your handler here
-    if (path == "/room-a/lamp") {
-      digitalWrite(relaiSatu, RTDB.to<bool>());
-    } else if (path == "/room-a/socket") {
-      digitalWrite(relaiDua, RTDB.to<bool>());
-    } else if (path == "/room-b/lamp") {
-      digitalWrite(relaiTiga, RTDB.to<bool>());
-    } else if (path == "/room-b/socket") {
-      digitalWrite(relaiEmpat, RTDB.to<bool>());
-    } else if (path == "/room-c/lamp") {
-      digitalWrite(relaiLima, RTDB.to<bool>());
-    } else if (path == "/room-c/socket") {
-      digitalWrite(relaiEnam, RTDB.to<bool>());
-    } else if (path == "/room-d/lamp") {
-      digitalWrite(relaiTujuh, RTDB.to<bool>());
-    } else if (path == "/room-d/socket") {
-      digitalWrite(relaiDelapan, RTDB.to<bool>());
+  // turn off all the lamp and socket
+  turnOffLampsAndSockets();
+}
+
+void RelayManager::flameClearedCallback() {
+  // turn off buzzer and water pump
+  isBuzzerBlinkActive = false;
+  digitalWrite(relaiPompa, LOW);
+
+  // TODO: re-initialize lamp, maybe
+}
+
+void RelayManager::smokeDetectedCallback() {
+  // activate buzzer blink
+  // digitalWrite(buzzer, HIGH);
+  isBuzzerBlinkActive = true;
+}
+
+void RelayManager::smokeClearedCallback() {
+  // turn off buzzer blink
+  // digitalWrite(buzzer, LOW);
+  isBuzzerBlinkActive = false;
+}
+
+void RelayManager::buzzerBlink() {
+  static bool buzzerState = LOW; // Track the current state of the buzzer
+
+  if (isBuzzerBlinkActive) {
+    // Check if it's time to toggle the buzzer state
+    if (millis() - buzzerBlinkMs >= 500) {
+      buzzerBlinkMs = millis();   // Reset the timer
+      buzzerState = !buzzerState; // Toggle the buzzer state
+      digitalWrite(buzzer, buzzerState);
     }
   } else {
-    Serial.println("----------------------------");
-    Firebase.printf("task: %s, payload: %s\n", aResult.uid().c_str(),
-                    aResult.c_str());
+    // Ensure the buzzer is off when blinking is inactive
+    digitalWrite(buzzer, LOW);
   }
+}
 
-  Firebase.printf("Free Heap: %d\n", ESP.getFreeHeap());
+void RelayManager::turnOffLampsAndSockets() {
+  digitalWrite(relaiSatu, LOW);
+  digitalWrite(relaiDua, LOW);
+  digitalWrite(relaiTiga, LOW);
+  digitalWrite(relaiEmpat, LOW);
+  digitalWrite(relaiLima, LOW);
+  digitalWrite(relaiEnam, LOW);
+  digitalWrite(relaiTujuh, LOW);
+  digitalWrite(relaiDelapan, LOW);
 }

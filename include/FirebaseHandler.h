@@ -3,11 +3,13 @@
 #include <FirebaseClient.h>
 #include <WiFiClientSecure.h>
 
-// TODO: separation of concern
 class FirebaseHandler {
 public:
   static void begin();
-  static void update();
+  static void loop();
+  static void processRelayStreamData();
+  static void manageMetricsData();
+  static void setSensorStatus(String sensorType, int value);
 
 private:
   // Firebase and networking objects
@@ -19,20 +21,15 @@ private:
   static AsyncResult aResult_no_callback, aResult_no_callback2;
   static LegacyToken legacy_token;
 
-  static void pushData(const char *path);
+  static void pushRealtimeMetricsData();
+  static void deleteRealtimeMetricsData(AsyncResult &aResult);
+  static void deleteFirstIndex(const char *path, JsonObject);
+
   static void updateTimer();
   static void printResult(AsyncResult &aResult);
-  static void deleteOldestKey(JsonDocument &doc, const char *path);
-  static void deleteOldestKeys(AsyncResult &aResult);
 
   static unsigned long ms;
   static unsigned long second, minute, hour;
   static unsigned int realtimeDataLength;
-  static bool deleteCompleted;
-
-  // Dump:
-  // static object_t randGenerator();
-  // static void getOldestKey(AsyncResult &aResult, const char *path);
-  // static void syncCallback(AsyncResult &aResult);
-  // static void asyncCallback(AsyncResult &aResult);
+  static bool isDeletingMetricData;
 };
