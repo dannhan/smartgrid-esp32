@@ -3,6 +3,7 @@
 #include "HardwareSerial.h"
 #include "RelayManager.h"
 #include "config.h"
+#include <PZEM004Tv30.h>
 
 // Define static variables
 unsigned long FirebaseHandler::ms = 0;
@@ -24,10 +25,11 @@ LegacyToken FirebaseHandler::legacy_token(DB_SECRET);
 // clang-format on
 
 /* -- Local Function Declaration -------------------- */
+float zeroIfNan(float v);
 
 // add perfix "0" if the number is less than 10
 String padZero(int num);
-object_t randGenerator(String time);
+object_t dataGenerator(String time, String type);
 void printError(AsyncResult aResult);
 
 /* -- Class Public Method -------------------------------- */
@@ -139,11 +141,11 @@ void FirebaseHandler::pushRealtimeMetricsData() {
 
   const String time = padZero(minute) + ":" + padZero(second);
 
-  // TODO: read real data instead
   // clang-format off
-  Database.push<object_t>(aClient2, "/monitor/voltages/realtime", randGenerator(time));
-  Database.push<object_t>(aClient2, "/monitor/currents/realtime", randGenerator(time));
-  Database.push<object_t>(aClient2, "/monitor/powers/realtime", randGenerator(time));
+  // TODO: this code is very blocking
+  Database.push<object_t>(aClient2, "/monitor/voltages/realtime", dataGenerator(time, "voltage"));
+  Database.push<object_t>(aClient2, "/monitor/currents/realtime", dataGenerator(time, "current"));
+  Database.push<object_t>(aClient2, "/monitor/powers/realtime", dataGenerator(time, "energy"));
   // clang-format on
 
   realtimeDataLength++;
@@ -232,11 +234,30 @@ void printError(AsyncResult aResult) {
 }
 
 // TODO: change this into data entry
-object_t randGenerator(String time) {
+PZEM004Tv30 pzem1(Serial2, 16, 17);
+
+float zeroIfNan(float v) { return isnan(v) ? 0 : v; }
+
+object_t dataGenerator(String time, String type) {
   char json[256];
   JsonDocument doc;
+
   doc["time"] = time;
-  doc["value"] = random(210, 226);
+
+  if (type == "voltage") {
+    const float voltage = zeroIfNan(pzem1.voltage());
+    Serial.printf("Voltage        : %.2f V\n", voltage);
+    doc["value"] = voltage;
+  } else if (type == "current") {
+    const float current = zeroIfNan(pzem1.current());
+    doc["value"] = zeroIfNan(pzem1.current());
+    Serial.printf("Current        : %.2f A\n", current);
+  } else if (type == "energy") {
+    const float energy = zeroIfNan(pzem1.energy());
+    doc["value"] = zeroIfNan(pzem1.energy());
+    Serial.printf("Energy         : %.2f kWh\n", energy);
+  }
+
   serializeJson(doc, json);
   return object_t(json);
 }
