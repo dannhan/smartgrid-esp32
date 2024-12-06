@@ -1,13 +1,14 @@
+// clang-format off
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// clang-format off
-// #define WIFI_SSID "Andini_Plus"
-// #define WIFI_PASSWORD "Andini12345"
+// WIFI GO HERE
 #define WIFI_SSID "Galaxyyyyy"
 #define WIFI_PASSWORD "qwertyuiop"
-#define DB_URL "https://smart-grid-c2630-default-rtdb.asia-southeast1.firebasedatabase.app/"
-#define DB_SECRET "MZW1MbKTRW1X5qeUZmBw9pan9E2zCVER63pqq1Lr"
-// clang-format on
+
+// FIREBASE GO HERE
+#define DB_URL "https://smart-grid-fa91a-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define DB_SECRET "9nG0NhBh8XawUhO8ee2BUXysOOADiyfncNzBEPLj"
 
 #endif // CONFIG_H
+// clang-format on
